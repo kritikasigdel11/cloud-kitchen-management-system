@@ -1,0 +1,23 @@
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Secret files
+.env
+.env.*
+
+# Database files and backups
+*.db
+*.sqlite
+*.sqlite3
+
+# VS Code
+.vscode/
+
