@@ -1,4 +1,3 @@
-
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -6,7 +5,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from functools import wraps
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 app = Flask(__name__)
 
 # =========================
@@ -667,6 +667,104 @@ def create_order():
             "orderId": order.order_id,
             "status": order.status
         }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+    # =========================
+# GET ALL ORDERS
+# =========================
+
+@app.route("/api/orders", methods=["GET"])
+def get_orders():
+    try:
+        orders = Order.query.order_by(Order.created_at.desc()).all()
+
+        result = []
+
+        for order in orders:
+            items = OrderItem.query.filter_by(order_id=order.id).all()
+
+            result.append({
+                "orderId": order.order_id,
+                "customer": {
+                    "name": order.customer_name,
+                    "phone": order.phone,
+                    "address": order.address,
+                    "city": order.city
+                },
+                "paymentMethod": order.payment_method,
+                "subtotal": order.subtotal,
+                "deliveryFee": order.delivery_fee,
+                "total": order.total,
+                "status": order.status,
+                "items": [
+                    {
+                        "name": item.item_name,
+                        "quantity": item.quantity,
+                        "price": item.price
+                    }
+                    for item in items
+                ]
+            })
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =========================
+# UPDATE ORDER STATUS
+# =========================
+
+@app.route("/api/orders/<string:order_id>/status", methods=["PATCH"])
+def update_order_status(order_id):
+    try:
+        data = request.get_json()
+
+        if not data or "status" not in data:
+            return jsonify({"error": "Status is required"}), 400
+
+        order = Order.query.filter_by(order_id=order_id).first()
+
+        if not order:
+            return jsonify({"error": "Order not found"}), 404
+
+        order.status = data["status"]
+        db.session.commit()
+
+        return jsonify({
+            "message": "Order status updated successfully",
+            "orderId": order.order_id,
+            "status": order.status
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# =========================
+# DELETE ORDER
+# =========================
+
+@app.route("/api/orders/<string:order_id>", methods=["DELETE"])
+def delete_order(order_id):
+    try:
+        order = Order.query.filter_by(order_id=order_id).first()
+
+        if not order:
+            return jsonify({"error": "Order not found"}), 404
+
+        OrderItem.query.filter_by(order_id=order.id).delete()
+
+        db.session.delete(order)
+        db.session.commit()
+
+        return jsonify({
+            "message": "Order deleted successfully"
+        }), 200
 
     except Exception as e:
         db.session.rollback()

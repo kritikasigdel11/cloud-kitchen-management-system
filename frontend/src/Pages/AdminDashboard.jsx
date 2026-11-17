@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./AdminDashboard.css";
@@ -11,7 +12,7 @@ function AdminDashboard() {
   const [menuItems, setMenuItems] = useState([]);
   const [inventoryItems, setInventoryItems] = useState([]);
 
-  // Read the login token saved by the Login page.
+  // AUTHENTICATION HELPERS
   const getAccessToken = () =>
     localStorage.getItem("access_token") ||
     sessionStorage.getItem("access_token") ||
@@ -20,16 +21,14 @@ function AdminDashboard() {
 
   const getAuthHeaders = (includeJson = false) => {
     const token = getAccessToken();
+
     return {
       ...(includeJson ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
   };
 
-  // =====================================================
   // DEFAULT INVENTORY
-  // =====================================================
-
   const defaultInventory = [
     { id: 1, name: "Maida Flour", stock: 25, unit: "kg", reorderLevel: 5 },
     { id: 2, name: "Chicken Meat", stock: 15, unit: "kg", reorderLevel: 4 },
@@ -41,28 +40,68 @@ function AdminDashboard() {
   ];
 
   // =====================================================
+  // LOAD ORDERS FROM FLASK DATABASE
+  // =====================================================
+
+  const loadOrders = async () => {
+    try {
+      const response = await fetch("http://127.0.0.1:5000/api/orders");
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not load orders.");
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid orders response from backend.");
+      }
+
+      // Convert backend order format into the format
+      // already used by the Admin Dashboard.
+      const formattedOrders = data.map((order) => ({
+        ...order,
+        cart: Array.isArray(order.items) ? order.items : [],
+        customer: order.customer || {
+          name: order.name || "Customer",
+          phone: order.phone || "",
+          address: order.address || "",
+          city: order.city || "",
+        },
+      }));
+
+      setOrders(formattedOrders);
+
+      // Keep localStorage updated for other existing pages.
+      localStorage.setItem(
+        "cloudKitchenOrders",
+        JSON.stringify(formattedOrders)
+      );
+    } catch (error) {
+      console.error("Order loading error:", error);
+      alert("Could not load orders. Please check whether Flask is running.");
+    }
+  };
+
+  // =====================================================
   // LOAD DATA FROM BACKEND & LOCAL STORAGE
   // =====================================================
 
   useEffect(() => {
-    let savedOrders = [];
-    let savedInventory = [];
+    // Load orders from SQLite through Flask.
+    loadOrders();
 
-    try {
-      const parsedOrders = JSON.parse(
-        localStorage.getItem("cloudKitchenOrders") || "[]"
-      );
-      savedOrders = Array.isArray(parsedOrders) ? parsedOrders : [];
-    } catch (error) {
-      console.error("Could not read saved orders:", error);
-    }
-    setOrders(savedOrders);
+    // Load inventory from localStorage.
+    let savedInventory = [];
 
     try {
       const parsedInventory = JSON.parse(
         localStorage.getItem("cloudKitchenInventory") || "[]"
       );
-      savedInventory = Array.isArray(parsedInventory) ? parsedInventory : [];
+
+      savedInventory = Array.isArray(parsedInventory)
+        ? parsedInventory
+        : [];
     } catch (error) {
       console.error("Could not read saved inventory:", error);
     }
@@ -71,19 +110,22 @@ function AdminDashboard() {
       setInventoryItems(savedInventory);
     } else {
       setInventoryItems(defaultInventory);
+
       localStorage.setItem(
         "cloudKitchenInventory",
         JSON.stringify(defaultInventory)
       );
     }
 
-    // Load menu items from Flask backend
+    // Load menu items from Flask.
     const loadMenu = async () => {
       try {
         const response = await fetch("http://127.0.0.1:5000/api/menu");
+
         if (!response.ok) {
-          throw new Error("Could not load menu items");
+          throw new Error("Could not load menu items.");
         }
+
         const data = await response.json();
         setMenuItems(data);
       } catch (error) {
@@ -96,21 +138,89 @@ function AdminDashboard() {
   }, []);
 
   // =====================================================
-  // ORDER FUNCTIONS
+  // UPDATE ORDER STATUS IN DATABASE
   // =====================================================
 
-  const updateOrderStatus = (orderId, newStatus) => {
-    const updatedOrders = orders.map((order) =>
-      order.orderId === orderId ? { ...order, status: newStatus } : order
-    );
-    setOrders(updatedOrders);
-    localStorage.setItem("cloudKitchenOrders", JSON.stringify(updatedOrders));
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/api/orders/${encodeURIComponent(orderId)}/status`,
+        {
+          method: "PATCH",
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({ status: newStatus }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not update order status.");
+      }
+
+      const updatedOrders = orders.map((order) =>
+        order.orderId === orderId
+          ? { ...order, status: data.status || newStatus }
+          : order
+      );
+
+      setOrders(updatedOrders);
+
+      localStorage.setItem(
+        "cloudKitchenOrders",
+        JSON.stringify(updatedOrders)
+      );
+
+      alert("Order status updated successfully!");
+    } catch (error) {
+      console.error("Order status update error:", error);
+      alert(error.message);
+      loadOrders();
+    }
   };
 
-  const deleteOrder = (orderId) => {
-    const updatedOrders = orders.filter((order) => order.orderId !== orderId);
-    setOrders(updatedOrders);
-    localStorage.setItem("cloudKitchenOrders", JSON.stringify(updatedOrders));
+  // =====================================================
+  // DELETE ORDER FROM DATABASE
+  // =====================================================
+
+  const deleteOrder = async (orderId) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete order ${orderId}?`
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/api/orders/${encodeURIComponent(orderId)}`,
+        {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not delete order.");
+      }
+
+      const updatedOrders = orders.filter(
+        (order) => order.orderId !== orderId
+      );
+
+      setOrders(updatedOrders);
+
+      localStorage.setItem(
+        "cloudKitchenOrders",
+        JSON.stringify(updatedOrders)
+      );
+
+      alert("Order deleted successfully!");
+    } catch (error) {
+      console.error("Order deletion error:", error);
+      alert(error.message);
+    }
   };
 
   // =====================================================
@@ -124,9 +234,11 @@ function AdminDashboard() {
     const category = window.prompt(
       "Enter category (Pizza, Burgers, Nepali, Noodles, Healthy, Drinks, Desserts, Snacks, Rice):"
     );
+
     if (!category || !category.trim()) return;
 
     const price = Number(window.prompt("Enter food price:"));
+
     if (!Number.isFinite(price) || price <= 0) {
       alert("Please enter a valid price.");
       return;
@@ -139,7 +251,7 @@ function AdminDashboard() {
         body: JSON.stringify({
           name: name.trim(),
           category: category.trim(),
-          price: price,
+          price,
           image: null,
           is_available: true,
         }),
@@ -148,11 +260,13 @@ function AdminDashboard() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Could not add food item");
+        throw new Error(data.error || "Could not add food item.");
       }
 
       const added = data.item || data;
+
       setMenuItems((previous) => [...previous, added]);
+
       alert("Food item added successfully!");
     } catch (error) {
       alert(error.message);
@@ -167,16 +281,22 @@ function AdminDashboard() {
     try {
       const response = await fetch(
         `http://127.0.0.1:5000/api/admin/menu/${id}`,
-        { method: "DELETE", headers: getAuthHeaders() }
+        {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Could not delete food item");
+        throw new Error(data.error || "Could not delete food item.");
       }
 
-      setMenuItems((previous) => previous.filter((item) => item.id !== id));
+      setMenuItems((previous) =>
+        previous.filter((item) => item.id !== id)
+      );
+
       alert("Food item deleted successfully!");
     } catch (error) {
       alert(error.message);
@@ -195,7 +315,6 @@ function AdminDashboard() {
       is_available: item.is_available,
     };
 
-    // Update state immediately for responsive typing
     setMenuItems((previous) =>
       previous.map((food) =>
         food.id === id
@@ -207,7 +326,6 @@ function AdminDashboard() {
       )
     );
 
-    // Save to database only if values are valid
     if (
       !updatedItem.name.trim() ||
       !updatedItem.category.trim() ||
@@ -230,15 +348,16 @@ function AdminDashboard() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Could not update food item");
+        throw new Error(data.error || "Could not update food item.");
       }
 
       const updated = data.item || data;
+
       setMenuItems((previous) =>
         previous.map((food) => (food.id === id ? updated : food))
       );
     } catch (error) {
-      console.error("Update error:", error);
+      console.error("Menu update error:", error);
     }
   };
 
@@ -252,17 +371,20 @@ function AdminDashboard() {
         {
           method: "PATCH",
           headers: getAuthHeaders(true),
-          body: JSON.stringify({ is_available: !item.is_available }),
+          body: JSON.stringify({
+            is_available: !item.is_available,
+          }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Could not update availability");
+        throw new Error(data.error || "Could not update availability.");
       }
 
       const updated = data.item || data;
+
       setMenuItems((previous) =>
         previous.map((food) => (food.id === id ? updated : food))
       );
@@ -283,8 +405,11 @@ function AdminDashboard() {
       unit: "kg",
       reorderLevel: 3,
     };
+
     const updatedInventory = [...inventoryItems, newItem];
+
     setInventoryItems(updatedInventory);
+
     localStorage.setItem(
       "cloudKitchenInventory",
       JSON.stringify(updatedInventory)
@@ -292,8 +417,12 @@ function AdminDashboard() {
   };
 
   const deleteInventoryItem = (id) => {
-    const updatedInventory = inventoryItems.filter((item) => item.id !== id);
+    const updatedInventory = inventoryItems.filter(
+      (item) => item.id !== id
+    );
+
     setInventoryItems(updatedInventory);
+
     localStorage.setItem(
       "cloudKitchenInventory",
       JSON.stringify(updatedInventory)
@@ -312,7 +441,9 @@ function AdminDashboard() {
           }
         : item
     );
+
     setInventoryItems(updatedInventory);
+
     localStorage.setItem(
       "cloudKitchenInventory",
       JSON.stringify(updatedInventory)
@@ -320,7 +451,7 @@ function AdminDashboard() {
   };
 
   // =====================================================
-  // STATISTICS & ANALYTICS CALCULATIONS
+  // STATISTICS & ANALYTICS
   // =====================================================
 
   const totalOrders = orders.length;
@@ -351,565 +482,577 @@ function AdminDashboard() {
   ).length;
 
   // =====================================================
-  // DASHBOARD TAB RENDER
+  // DASHBOARD TAB
   // =====================================================
 
-  const renderDashboard = () => {
-    return (
-      <div className="admin-content">
-        <div className="admin-header">
+  const renderDashboard = () => (
+    <div className="admin-content">
+      <div className="admin-header">
+        <div>
+          <h1>Admin Dashboard</h1>
+          <p>Welcome back, Admin 👋</p>
+        </div>
+
+        <div className="admin-profile">
+          <div className="profile-avatar">A</div>
           <div>
-            <h1>Admin Dashboard</h1>
-            <p>Welcome back, Admin 👋</p>
-          </div>
-
-          <div className="admin-profile">
-            <div className="profile-avatar">A</div>
-            <div>
-              <strong>Administrator</strong>
-              <span>Admin</span>
-            </div>
+            <strong>Administrator</strong>
+            <span>Admin</span>
           </div>
         </div>
-
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-icon">🛒</div>
-            <div>
-              <span>Total Orders</span>
-              <strong>{totalOrders}</strong>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon">⏳</div>
-            <div>
-              <span>Pending Orders</span>
-              <strong>{pendingOrders}</strong>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon">👨‍🍳</div>
-            <div>
-              <span>Preparing</span>
-              <strong>{preparingOrders}</strong>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon">💰</div>
-            <div>
-              <span>Total Sales</span>
-              <strong>Rs. {totalSales}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div className="section-title">
-          <h2>Quick Actions</h2>
-          <p>Manage your cloud kitchen easily</p>
-        </div>
-
-        <div className="quick-actions">
-          <button
-            onClick={() => setActiveTab("Orders")}
-            className="quick-card"
-          >
-            <span>🛒</span>
-            <strong>Manage Orders</strong>
-            <small>View and update customer orders</small>
-          </button>
-
-          <button onClick={() => setActiveTab("Menu")} className="quick-card">
-            <span>🍔</span>
-            <strong>Manage Menu</strong>
-            <small>Add or edit food items</small>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("Inventory")}
-            className="quick-card"
-          >
-            <span>📦</span>
-            <strong>Check Inventory</strong>
-            <small>Manage ingredients and stock</small>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("Reports")}
-            className="quick-card"
-          >
-            <span>📊</span>
-            <strong>View Reports</strong>
-            <small>Check sales and order reports</small>
-          </button>
-        </div>
-
-        <div className="section-title">
-          <h2>Recent Orders</h2>
-          <p>Latest customer orders</p>
-        </div>
-
-        {orders.length === 0 ? (
-          <div className="empty-state">
-            <div>📦</div>
-            <h3>No Orders Yet</h3>
-            <p>Customer orders will appear here.</p>
-          </div>
-        ) : (
-          <div className="orders-table-wrapper">
-            <table className="orders-table">
-              <thead>
-                <tr>
-                  <th>Order ID</th>
-                  <th>Customer</th>
-                  <th>Items</th>
-                  <th>Total</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders
-                  .slice(-5)
-                  .reverse()
-                  .map((order) => (
-                    <tr key={order.orderId}>
-                      <td>
-                        <strong>{order.orderId}</strong>
-                      </td>
-                      <td>{order.customer?.name}</td>
-                      <td>{order.cart?.length || 0} items</td>
-                      <td>Rs. {order.total}</td>
-                      <td>
-                        <span
-                          className={`status-badge ${order.status
-                            ?.toLowerCase()
-                            .replaceAll(" ", "-")}`}
-                        >
-                          {order.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
-    );
-  };
 
-  // =====================================================
-  // ORDERS TAB RENDER
-  // =====================================================
-
-  const renderOrders = () => {
-    return (
-      <div className="admin-content">
-        <div className="admin-header">
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon">🛒</div>
           <div>
-            <h1>Order Management</h1>
-            <p>View and manage customer orders</p>
-          </div>
-
-          <div className="admin-profile">
-            <div className="profile-avatar">A</div>
-            <div>
-              <strong>Administrator</strong>
-              <span>Admin</span>
-            </div>
+            <span>Total Orders</span>
+            <strong>{totalOrders}</strong>
           </div>
         </div>
 
-        {orders.length === 0 ? (
-          <div className="empty-state">
-            <div>📦</div>
-            <h3>No Orders Found</h3>
-            <p>There are currently no customer orders.</p>
+        <div className="stat-card">
+          <div className="stat-icon">⏳</div>
+          <div>
+            <span>Pending Orders</span>
+            <strong>{pendingOrders}</strong>
           </div>
-        ) : (
-          <div className="order-management-grid">
-            {orders.map((order) => (
-              <div className="order-management-card" key={order.orderId}>
-                <div className="order-card-top">
-                  <div>
-                    <span className="order-label">Order ID</span>
-                    <h3>{order.orderId}</h3>
-                  </div>
-                  <strong className="order-price">Rs. {order.total}</strong>
-                </div>
+        </div>
 
-                <div className="customer-details">
-                  <p>
-                    📞 <strong>{order.customer?.phone}</strong>
-                  </p>
-                  <p>
-                    📍 {order.customer?.address}, {order.customer?.city}
-                  </p>
-                  <p>💳 {order.paymentMethod}</p>
-                </div>
+        <div className="stat-card">
+          <div className="stat-icon">👨‍🍳</div>
+          <div>
+            <span>Preparing</span>
+            <strong>{preparingOrders}</strong>
+          </div>
+        </div>
 
-                <div className="order-items">
-                  {order.cart?.map((item, index) => (
-                    <div
-                      className="admin-order-item"
-                      key={`${item.name}-${index}`}
+        <div className="stat-card">
+          <div className="stat-icon">💰</div>
+          <div>
+            <span>Total Sales</span>
+            <strong>Rs. {totalSales}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="section-title">
+        <h2>Quick Actions</h2>
+        <p>Manage your cloud kitchen easily</p>
+      </div>
+
+      <div className="quick-actions">
+        <button
+          onClick={() => setActiveTab("Orders")}
+          className="quick-card"
+        >
+          <span>🛒</span>
+          <strong>Manage Orders</strong>
+          <small>View and update customer orders</small>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("Menu")}
+          className="quick-card"
+        >
+          <span>🍔</span>
+          <strong>Manage Menu</strong>
+          <small>Add or edit food items</small>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("Inventory")}
+          className="quick-card"
+        >
+          <span>📦</span>
+          <strong>Check Inventory</strong>
+          <small>Manage ingredients and stock</small>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("Reports")}
+          className="quick-card"
+        >
+          <span>📊</span>
+          <strong>View Reports</strong>
+          <small>Check sales and order reports</small>
+        </button>
+      </div>
+
+      <div className="section-title">
+        <h2>Recent Orders</h2>
+        <p>Latest customer orders</p>
+      </div>
+
+      {orders.length === 0 ? (
+        <div className="empty-state">
+          <div>📦</div>
+          <h3>No Orders Yet</h3>
+          <p>Customer orders will appear here.</p>
+        </div>
+      ) : (
+        <div className="orders-table-wrapper">
+          <table className="orders-table">
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Customer</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {orders.slice(0, 5).map((order) => (
+                <tr key={order.orderId}>
+                  <td>
+                    <strong>{order.orderId}</strong>
+                  </td>
+                  <td>{order.customer?.name}</td>
+                  <td>{order.cart?.length || 0} items</td>
+                  <td>Rs. {order.total}</td>
+                  <td>
+                    <span
+                      className={`status-badge ${order.status
+                        ?.toLowerCase()
+                        .replace(/\s+/g, "-")}`}
                     >
-                      {item.image ? (
-                        <img src={item.image} alt={item.name} />
-                      ) : (
-                        <span className="admin-item-emoji">
-                          {item.icon || "🍲"}
-                        </span>
-                      )}
-                      <div>
-                        <strong>{item.name}</strong>
-                        <span>× {item.quantity}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                      {order.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 
-                <div className="order-status-section">
-                  <label>Order Status</label>
-                  <select
-                    value={order.status}
-                    onChange={(e) =>
-                      updateOrderStatus(order.orderId, e.target.value)
-                    }
-                  >
-                    <option>Pending</option>
-                    <option>Preparing</option>
-                    <option>Ready</option>
-                    <option>Out for Delivery</option>
-                    <option>Delivered</option>
-                  </select>
-                </div>
+  // =====================================================
+  // ORDERS TAB
+  // =====================================================
 
-                <button
-                  className="delete-order-btn"
-                  onClick={() => deleteOrder(order.orderId)}
-                >
-                  🗑️ Delete Order
-                </button>
-              </div>
-            ))}
+  const renderOrders = () => (
+    <div className="admin-content">
+      <div className="admin-header">
+        <div>
+          <h1>Order Management</h1>
+          <p>View and manage customer orders</p>
+        </div>
+
+        <div className="admin-profile">
+          <div className="profile-avatar">A</div>
+          <div>
+            <strong>Administrator</strong>
+            <span>Admin</span>
           </div>
-        )}
+        </div>
       </div>
-    );
-  };
 
-  // =====================================================
-  // MENU TAB RENDER
-  // =====================================================
+      <div className="menu-admin-top">
+        <div>
+          <h2>Customer Orders</h2>
+          <p>Orders retrieved directly from the database.</p>
+        </div>
 
-  const renderMenu = () => {
-    return (
-      <div className="admin-content">
-        <div className="admin-header">
-          <div>
-            <h1>Menu Management</h1>
-            <p>Add, edit and manage your food items</p>
-          </div>
+        <button className="add-menu-btn" onClick={loadOrders}>
+          ↻ Refresh Orders
+        </button>
+      </div>
 
-          <div className="admin-profile">
-            <div className="profile-avatar">A</div>
-            <div>
-              <strong>Administrator</strong>
-              <span>Admin</span>
+      {orders.length === 0 ? (
+        <div className="empty-state">
+          <div>📦</div>
+          <h3>No Orders Found</h3>
+          <p>There are currently no customer orders.</p>
+        </div>
+      ) : (
+        <div className="order-management-grid">
+          {orders.map((order) => (
+            <div className="order-management-card" key={order.orderId}>
+              <div className="order-card-top">
+                <div>
+                  <span className="order-label">Order ID</span>
+                  <h3>{order.orderId}</h3>
+                </div>
+
+                <strong className="order-price">
+                  Rs. {order.total}
+                </strong>
+              </div>
+
+              <div className="customer-details">
+                <p>
+                  👤 <strong>{order.customer?.name}</strong>
+                </p>
+                <p>
+                  📞 <strong>{order.customer?.phone}</strong>
+                </p>
+                <p>
+                  📍 {order.customer?.address}, {order.customer?.city}
+                </p>
+                <p>💳 {order.paymentMethod}</p>
+              </div>
+
+              <div className="order-items">
+                {order.cart?.map((item, index) => (
+                  <div
+                    className="admin-order-item"
+                    key={`${item.name}-${index}`}
+                  >
+                    {item.image ? (
+                      <img src={item.image} alt={item.name} />
+                    ) : (
+                      <span className="admin-item-emoji">
+                        {item.icon || "🍲"}
+                      </span>
+                    )}
+
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>× {item.quantity}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="order-status-section">
+                <label>Order Status</label>
+
+                <select
+                  value={order.status || "Pending"}
+                  onChange={(e) =>
+                    updateOrderStatus(order.orderId, e.target.value)
+                  }
+                >
+                  <option>Pending</option>
+                  <option>Preparing</option>
+                  <option>Ready</option>
+                  <option>Out for Delivery</option>
+                  <option>Delivered</option>
+                </select>
+              </div>
+
+              <button
+                className="delete-order-btn"
+                onClick={() => deleteOrder(order.orderId)}
+              >
+                🗑️ Delete Order
+              </button>
             </div>
-          </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // =====================================================
+  // MENU TAB
+  // =====================================================
+
+  const renderMenu = () => (
+    <div className="admin-content">
+      <div className="admin-header">
+        <div>
+          <h1>Menu Management</h1>
+          <p>Add, edit and manage your food items</p>
         </div>
 
-        <div className="menu-admin-top">
+        <div className="admin-profile">
+          <div className="profile-avatar">A</div>
           <div>
-            <h2>Food Menu</h2>
-            <p>Manage the dishes available to customers.</p>
+            <strong>Administrator</strong>
+            <span>Admin</span>
           </div>
+        </div>
+      </div>
 
-          <button className="add-menu-btn" onClick={addMenuItem}>
-            + Add Food Item
-          </button>
+      <div className="menu-admin-top">
+        <div>
+          <h2>Food Menu</h2>
+          <p>Manage the dishes available to customers.</p>
         </div>
 
-        <div className="menu-count">
-          <span>{menuItems.length} food items</span>
-          <span>
-            {menuItems.filter((item) => item.is_available).length} available
-          </span>
+        <button className="add-menu-btn" onClick={addMenuItem}>
+          + Add Food Item
+        </button>
+      </div>
+
+      <div className="menu-count">
+        <span>{menuItems.length} food items</span>
+        <span>
+          {menuItems.filter((item) => item.is_available).length} available
+        </span>
+      </div>
+
+      {menuItems.length === 0 ? (
+        <div className="empty-state">
+          <div>🍔</div>
+          <h3>No Menu Items</h3>
+          <p>Click "Add Food Item" to create your first menu item.</p>
         </div>
+      ) : (
+        <div className="admin-menu-grid">
+          {menuItems.map((item) => (
+            <div className="admin-menu-card" key={item.id}>
+              <div className="admin-menu-image">
+                {item.image ? (
+                  <img src={item.image} alt={item.name} />
+                ) : (
+                  <div className="no-image">🍽️</div>
+                )}
 
-        {menuItems.length === 0 ? (
-          <div className="empty-state">
-            <div>🍔</div>
-            <h3>No Menu Items</h3>
-            <p>Click "Add Food Item" to create your first menu item.</p>
-          </div>
-        ) : (
-          <div className="admin-menu-grid">
-            {menuItems.map((item) => (
-              <div className="admin-menu-card" key={item.id}>
-                <div className="admin-menu-image">
-                  {item.image ? (
-                    <img src={item.image} alt={item.name} />
-                  ) : (
-                    <div className="no-image">🍽️</div>
-                  )}
+                <span
+                  className={
+                    item.is_available
+                      ? "available-badge"
+                      : "unavailable-badge"
+                  }
+                >
+                  {item.is_available ? "Available" : "Unavailable"}
+                </span>
+              </div>
 
-                  <span
+              <div className="admin-menu-info">
+                <label>Food Name</label>
+                <input
+                  type="text"
+                  value={item.name}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "name", e.target.value)
+                  }
+                />
+
+                <label>Category</label>
+                <select
+                  value={item.category}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "category", e.target.value)
+                  }
+                >
+                  <option>Pizza</option>
+                  <option>Burgers</option>
+                  <option>Nepali</option>
+                  <option>Noodles</option>
+                  <option>Healthy</option>
+                  <option>Drinks</option>
+                  <option>Desserts</option>
+                  <option>Snacks</option>
+                  <option>Rice</option>
+                </select>
+
+                <label>Price</label>
+                <div className="price-input">
+                  <span>Rs.</span>
+                  <input
+                    type="number"
+                    value={item.price}
+                    onChange={(e) =>
+                      updateMenuItem(item.id, "price", e.target.value)
+                    }
+                  />
+                </div>
+
+                <div className="menu-card-actions">
+                  <button
                     className={
                       item.is_available
-                        ? "available-badge"
-                        : "unavailable-badge"
+                        ? "availability-btn"
+                        : "availability-btn inactive"
                     }
+                    onClick={() => toggleMenuAvailability(item.id)}
                   >
-                    {item.is_available ? "Available" : "Unavailable"}
+                    {item.is_available ? "✓ Available" : "✕ Unavailable"}
+                  </button>
+
+                  <button
+                    className="delete-menu-btn"
+                    onClick={() => deleteMenuItem(item.id)}
+                  >
+                    🗑️ Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // =====================================================
+  // INVENTORY TAB
+  // =====================================================
+
+  const renderInventory = () => (
+    <div className="admin-content">
+      <div className="admin-header">
+        <div>
+          <h1>Inventory Management 📦</h1>
+          <p>Monitor raw ingredients, stock levels and reorder alerts</p>
+        </div>
+
+        <div className="admin-profile">
+          <div className="profile-avatar">A</div>
+          <div>
+            <strong>Administrator</strong>
+            <span>Admin</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon">📦</div>
+          <div>
+            <span>Total Ingredients</span>
+            <strong>{inventoryItems.length}</strong>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon">⚠️</div>
+          <div>
+            <span>Low Stock Alerts</span>
+            <strong>{lowStockCount}</strong>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon">🚫</div>
+          <div>
+            <span>Out of Stock</span>
+            <strong>{outOfStockCount}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="menu-admin-top">
+        <div>
+          <h2>Raw Ingredients & Stock</h2>
+          <p>Edit stock levels, units, and reorder levels below.</p>
+        </div>
+
+        <button className="add-menu-btn" onClick={addInventoryItem}>
+          ➕ Add Ingredient
+        </button>
+      </div>
+
+      {inventoryItems.length === 0 ? (
+        <div className="empty-state">
+          <div>📦</div>
+          <h3>No Inventory Items Found</h3>
+          <p>Click "Add Ingredient" to start tracking raw ingredients.</p>
+        </div>
+      ) : (
+        <div className="inventory-grid">
+          {inventoryItems.map((item) => {
+            let statusLabel = "🟢 Good Stock";
+            let statusClass = "good-stock";
+
+            if (item.stock <= 0) {
+              statusLabel = "🔴 Out of Stock";
+              statusClass = "out-of-stock";
+            } else if (item.stock <= item.reorderLevel) {
+              statusLabel = "🟠 Low Stock Alert";
+              statusClass = "low-stock";
+            }
+
+            return (
+              <div className="inventory-card" key={item.id}>
+                <div className="inventory-card-header">
+                  <span className={`inventory-status-badge ${statusClass}`}>
+                    {statusLabel}
                   </span>
+
+                  <button
+                    className="delete-menu-btn"
+                    onClick={() => deleteInventoryItem(item.id)}
+                    title="Delete Ingredient"
+                  >
+                    🗑️
+                  </button>
                 </div>
 
                 <div className="admin-menu-info">
-                  <label>Food Name</label>
+                  <label>Ingredient Name</label>
                   <input
                     type="text"
                     value={item.name}
                     onChange={(e) =>
-                      updateMenuItem(item.id, "name", e.target.value)
+                      updateInventoryItem(item.id, "name", e.target.value)
                     }
+                    placeholder="e.g., Maida Flour"
                   />
 
-                  <label>Category</label>
-                  <select
-                    value={item.category}
-                    onChange={(e) =>
-                      updateMenuItem(item.id, "category", e.target.value)
-                    }
-                  >
-                    <option>Pizza</option>
-                    <option>Burgers</option>
-                    <option>Nepali</option>
-                    <option>Noodles</option>
-                    <option>Healthy</option>
-                    <option>Drinks</option>
-                    <option>Desserts</option>
-                    <option>Snacks</option>
-                    <option>Rice</option>
-                  </select>
-
-                  <label>Price</label>
-                  <div className="price-input">
-                    <span>Rs.</span>
-                    <input
-                      type="number"
-                      value={item.price}
-                      onChange={(e) =>
-                        updateMenuItem(item.id, "price", e.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div className="menu-card-actions">
-                    <button
-                      className={
-                        item.is_available
-                          ? "availability-btn"
-                          : "availability-btn inactive"
-                      }
-                      onClick={() => toggleMenuAvailability(item.id)}
-                    >
-                      {item.is_available ? "✓ Available" : "✕ Unavailable"}
-                    </button>
-
-                    <button
-                      className="delete-menu-btn"
-                      onClick={() => deleteMenuItem(item.id)}
-                    >
-                      🗑️ Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // =====================================================
-  // INVENTORY TAB RENDER
-  // =====================================================
-
-  const renderInventory = () => {
-    return (
-      <div className="admin-content">
-        <div className="admin-header">
-          <div>
-            <h1>Inventory Management 📦</h1>
-            <p>Monitor raw ingredients, stock levels and reorder alerts</p>
-          </div>
-
-          <div className="admin-profile">
-            <div className="profile-avatar">A</div>
-            <div>
-              <strong>Administrator</strong>
-              <span>Admin</span>
-            </div>
-          </div>
-        </div>
-
-        {/* INVENTORY STATS */}
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-icon">📦</div>
-            <div>
-              <span>Total Ingredients</span>
-              <strong>{inventoryItems.length}</strong>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon">⚠️</div>
-            <div>
-              <span>Low Stock Alerts</span>
-              <strong>{lowStockCount}</strong>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon">🚫</div>
-            <div>
-              <span>Out of Stock</span>
-              <strong>{outOfStockCount}</strong>
-            </div>
-          </div>
-        </div>
-
-        {/* INVENTORY TOP ACTION BAR */}
-        <div className="menu-admin-top">
-          <div>
-            <h2>Raw Ingredients & Stock</h2>
-            <p>Edit stock levels, units, and reorder levels below.</p>
-          </div>
-
-          <button className="add-menu-btn" onClick={addInventoryItem}>
-            ➕ Add Ingredient
-          </button>
-        </div>
-
-        {/* INVENTORY GRID CARDS */}
-        {inventoryItems.length === 0 ? (
-          <div className="empty-state">
-            <div>📦</div>
-            <h3>No Inventory Items Found</h3>
-            <p>Click "Add Ingredient" to start tracking raw ingredients.</p>
-          </div>
-        ) : (
-          <div className="inventory-grid">
-            {inventoryItems.map((item) => {
-              let statusLabel = "🟢 Good Stock";
-              let statusClass = "good-stock";
-
-              if (item.stock <= 0) {
-                statusLabel = "🔴 Out of Stock";
-                statusClass = "out-of-stock";
-              } else if (item.stock <= item.reorderLevel) {
-                statusLabel = "🟠 Low Stock Alert";
-                statusClass = "low-stock";
-              }
-
-              return (
-                <div className="inventory-card" key={item.id}>
-                  <div className="inventory-card-header">
-                    <span className={`inventory-status-badge ${statusClass}`}>
-                      {statusLabel}
-                    </span>
-                    <button
-                      className="delete-menu-btn"
-                      onClick={() => deleteInventoryItem(item.id)}
-                      title="Delete Ingredient"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-
-                  <div className="admin-menu-info">
-                    <label>Ingredient Name</label>
-                    <input
-                      type="text"
-                      value={item.name}
-                      onChange={(e) =>
-                        updateInventoryItem(item.id, "name", e.target.value)
-                      }
-                      placeholder="e.g., Maida Flour"
-                    />
-
-                    <div className="form-row-2col">
-                      <div>
-                        <label>Current Stock</label>
-                        <input
-                          type="number"
-                          value={item.stock}
-                          onChange={(e) =>
-                            updateInventoryItem(item.id, "stock", e.target.value)
-                          }
-                        />
-                      </div>
-
-                      <div>
-                        <label>Unit 📏</label>
-                        <select
-                          value={item.unit}
-                          onChange={(e) =>
-                            updateInventoryItem(item.id, "unit", e.target.value)
-                          }
-                        >
-                          <option value="kg">kg</option>
-                          <option value="ltr">ltr</option>
-                          <option value="pcs">pcs</option>
-                          <option value="g">g</option>
-                          <option value="ml">ml</option>
-                          <option value="packs">packs</option>
-                        </select>
-                      </div>
+                  <div className="form-row-2col">
+                    <div>
+                      <label>Current Stock</label>
+                      <input
+                        type="number"
+                        value={item.stock}
+                        onChange={(e) =>
+                          updateInventoryItem(item.id, "stock", e.target.value)
+                        }
+                      />
                     </div>
 
-                    <label>Reorder Level ⚠️</label>
-                    <input
-                      type="number"
-                      value={item.reorderLevel}
-                      onChange={(e) =>
-                        updateInventoryItem(
-                          item.id,
-                          "reorderLevel",
-                          e.target.value
-                        )
-                      }
-                      placeholder="Alert when stock falls below"
-                    />
+                    <div>
+                      <label>Unit 📏</label>
+                      <select
+                        value={item.unit}
+                        onChange={(e) =>
+                          updateInventoryItem(item.id, "unit", e.target.value)
+                        }
+                      >
+                        <option value="kg">kg</option>
+                        <option value="ltr">ltr</option>
+                        <option value="pcs">pcs</option>
+                        <option value="g">g</option>
+                        <option value="ml">ml</option>
+                        <option value="packs">packs</option>
+                      </select>
+                    </div>
                   </div>
+
+                  <label>Reorder Level ⚠️</label>
+                  <input
+                    type="number"
+                    value={item.reorderLevel}
+                    onChange={(e) =>
+                      updateInventoryItem(
+                        item.id,
+                        "reorderLevel",
+                        e.target.value
+                      )
+                    }
+                    placeholder="Alert when stock falls below"
+                  />
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   // =====================================================
-  // REPORTS TAB RENDER
+  // REPORTS TAB
   // =====================================================
 
   const renderReports = () => {
     const foodCountMap = {};
+
     orders.forEach((order) => {
       const items = Array.isArray(order.cart)
         ? order.cart
         : Array.isArray(order.items)
         ? order.items
         : [];
+
       items.forEach((item) => {
         if (item.name) {
           foodCountMap[item.name] =
@@ -927,7 +1070,9 @@ function AdminDashboard() {
         <div className="admin-header">
           <div>
             <h1>Reports & Analytics 📊</h1>
-            <p>View cloud kitchen sales performance, food orders and statistics</p>
+            <p>
+              View cloud kitchen sales performance, food orders and statistics
+            </p>
           </div>
 
           <div className="admin-profile">
@@ -939,15 +1084,14 @@ function AdminDashboard() {
           </div>
         </div>
 
-        {/* REPORT CONTENT: TWO COLUMNS */}
         <div className="reports-two-column">
-          {/* POPULAR FOOD PANEL */}
           <div className="report-panel popular-food-panel">
             <div className="report-panel-header">
               <div>
                 <h2>🍔 Popular Food Items</h2>
                 <p>Most ordered food items</p>
               </div>
+
               <span className="report-count">
                 {popularItems.length} foods
               </span>
@@ -978,7 +1122,6 @@ function AdminDashboard() {
             )}
           </div>
 
-          {/* SALES OVERVIEW PANEL */}
           <div className="report-panel sales-panel">
             <div className="report-panel-header">
               <div>
@@ -1005,13 +1148,14 @@ function AdminDashboard() {
 
               <div className="sales-row total">
                 <span>Total Sales</span>
-                <strong>Rs. {Number(totalSales).toLocaleString("en-IN")}</strong>
+                <strong>
+                  Rs. {Number(totalSales).toLocaleString("en-IN")}
+                </strong>
               </div>
             </div>
           </div>
         </div>
 
-        {/* RECENT ORDERS TABLE */}
         <div className="section-title">
           <h2>Recent Orders</h2>
           <p>Latest orders included in the report</p>
@@ -1037,41 +1181,33 @@ function AdminDashboard() {
               </thead>
 
               <tbody>
-                {orders
-                  .slice(-8)
-                  .reverse()
-                  .map((order, index) => {
-                    const orderId =
-                      order.orderId || order.id || `Order-${index + 1}`;
-                    const customerName =
-                      order.customer?.name || order.name || "Customer";
-                    const items = Array.isArray(order.cart)
-                      ? order.cart
-                      : Array.isArray(order.items)
-                      ? order.items
-                      : [];
-                    const status = order.status || "Pending";
+                {orders.slice(0, 8).map((order) => {
+                  const items = Array.isArray(order.cart)
+                    ? order.cart
+                    : [];
 
-                    return (
-                      <tr key={orderId}>
-                        <td>
-                          <strong>{orderId}</strong>
-                        </td>
-                        <td>{customerName}</td>
-                        <td>{items.length} items</td>
-                        <td>Rs. {Number(order.total || 0)}</td>
-                        <td>
-                          <span
-                            className={`status-badge ${status
-                              .toLowerCase()
-                              .replace(/\\s+/g, "-")}`}
-                          >
-                            {status}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  const status = order.status || "Pending";
+
+                  return (
+                    <tr key={order.orderId}>
+                      <td>
+                        <strong>{order.orderId}</strong>
+                      </td>
+                      <td>{order.customer?.name || "Customer"}</td>
+                      <td>{items.length} items</td>
+                      <td>Rs. {Number(order.total || 0)}</td>
+                      <td>
+                        <span
+                          className={`status-badge ${status
+                            .toLowerCase()
+                            .replace(/\s+/g, "-")}`}
+                        >
+                          {status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1088,14 +1224,19 @@ function AdminDashboard() {
     switch (activeTab) {
       case "Dashboard":
         return renderDashboard();
+
       case "Orders":
         return renderOrders();
+
       case "Menu":
         return renderMenu();
+
       case "Inventory":
         return renderInventory();
+
       case "Reports":
         return renderReports();
+
       default:
         return renderDashboard();
     }
@@ -1107,14 +1248,11 @@ function AdminDashboard() {
 
   return (
     <div className="admin-layout">
-      {/* SIDEBAR */}
       <aside className="admin-sidebar">
-        {/* LOGO */}
         <div className="admin-logo">
           🍽️ <span>Cloud Kitchen</span>
         </div>
 
-        {/* NAVIGATION */}
         <nav className="admin-nav">
           <button
             className={activeTab === "Dashboard" ? "active" : ""}
@@ -1152,11 +1290,11 @@ function AdminDashboard() {
           </button>
         </nav>
 
-        {/* BOTTOM BUTTONS */}
         <div className="sidebar-bottom">
           <button onClick={() => navigate("/")}>
             🏠 Back to Website
           </button>
+
           <button
             onClick={() => {
               localStorage.removeItem("access_token");
@@ -1173,9 +1311,9 @@ function AdminDashboard() {
         </div>
       </aside>
 
-      {/* MAIN CONTENT */}
       <main className="admin-main">{renderContent()}</main>
     </div>
   );
 }
+
 export default AdminDashboard;

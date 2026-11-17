@@ -12,6 +12,7 @@ venv/
 # Secret files
 .env
 .env.*
+!.env.example
 
 # Database files and backups
 *.db
