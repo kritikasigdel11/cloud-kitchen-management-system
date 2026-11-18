@@ -1,18 +1,76 @@
 
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "./KitchenDisplay.css";
 
 const API_URL = "http://127.0.0.1:5000/api/orders";
 
 function KitchenDisplay() {
+  const navigate = useNavigate();
+
   const [orders, setOrders] = useState([]);
   const [newOrderAlert, setNewOrderAlert] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const previousOrderCount = useRef(null);
 
-  /* =========================
-     LOAD ORDERS FROM BACKEND
-  ========================= */
+  // AUTHENTICATION PROTECTION
+  useEffect(() => {
+    const token =
+      localStorage.getItem("access_token") ||
+      sessionStorage.getItem("access_token") ||
+      localStorage.getItem("token") ||
+      sessionStorage.getItem("token");
 
+    const storedUser =
+      localStorage.getItem("user") ||
+      sessionStorage.getItem("user");
+
+    if (!token || !storedUser) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    try {
+      const user = JSON.parse(storedUser);
+
+      if (!["kitchen_staff", "admin"].includes(user.role)) {
+        navigate("/", { replace: true });
+        return;
+      }
+
+      setAuthChecked(true);
+    } catch (error) {
+      navigate("/login", { replace: true });
+    }
+  }, [navigate]);
+
+  // AUTHORIZATION HEADERS
+  const getAuthHeaders = (includeJson = false) => {
+    const token =
+      localStorage.getItem("access_token") ||
+      sessionStorage.getItem("access_token") ||
+      localStorage.getItem("token") ||
+      sessionStorage.getItem("token");
+
+    return {
+      ...(includeJson ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
+  // LOGOUT
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    sessionStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+    sessionStorage.removeItem("token");
+    localStorage.removeItem("user");
+    sessionStorage.removeItem("user");
+
+    navigate("/login", { replace: true });
+  };
+
+  // LOAD ORDERS
   const loadOrders = async () => {
     try {
       const response = await fetch(API_URL);
@@ -34,7 +92,6 @@ function KitchenDisplay() {
         createdAt: order.createdAt || order.created_at,
       }));
 
-      // Detect newly received orders
       if (
         previousOrderCount.current !== null &&
         savedOrders.length > previousOrderCount.current
@@ -47,10 +104,8 @@ function KitchenDisplay() {
       }
 
       previousOrderCount.current = savedOrders.length;
-
       setOrders(savedOrders);
 
-      // Keep localStorage updated for other frontend pages
       localStorage.setItem(
         "cloudKitchenOrders",
         JSON.stringify(savedOrders)
@@ -60,70 +115,56 @@ function KitchenDisplay() {
     }
   };
 
-  /* =========================
-     AUTOMATIC REFRESH
-  ========================= */
-
+  // AUTOMATIC REFRESH
   useEffect(() => {
+    if (!authChecked) return;
+
     loadOrders();
 
-    const interval = setInterval(() => {
-      loadOrders();
-    }, 3000);
+    const interval = setInterval(loadOrders, 3000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [authChecked]);
 
-  /* =========================
-     UPDATE ORDER STATUS
-  ========================= */
-
+  // UPDATE ORDER STATUS
   const updateOrderStatus = async (orderId, newStatus) => {
     try {
       const response = await fetch(
         `${API_URL}/${encodeURIComponent(orderId)}/status`,
         {
           method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            status: newStatus,
-          }),
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({ status: newStatus }),
         }
       );
 
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Could not update order status");
+        throw new Error(
+          result.error || "Could not update order status"
+        );
       }
 
       alert(`Order ${orderId} updated to ${newStatus}.`);
 
-      // Reload the latest orders from the database
       await loadOrders();
     } catch (error) {
       console.error("Error updating order:", error);
-      alert("Could not update order status. Please try again.");
+      alert(error.message || "Could not update order status.");
     }
   };
 
-  /* =========================
-     ACTIVE KITCHEN ORDERS
-  ========================= */
+  if (!authChecked) {
+    return null;
+  }
 
-  const kitchenOrders = orders.filter(
-    (order) =>
-      order.status === "Pending" ||
-      order.status === "Preparing" ||
-      order.status === "Ready"
+  // ACTIVE KITCHEN ORDERS
+  const kitchenOrders = orders.filter((order) =>
+    ["Pending", "Preparing", "Ready"].includes(order.status)
   );
 
-  /* =========================
-     COUNTS
-  ========================= */
-
+  // COUNTS
   const pendingCount = orders.filter(
     (order) => order.status === "Pending"
   ).length;
@@ -136,20 +177,13 @@ function KitchenDisplay() {
     (order) => order.status === "Ready"
   ).length;
 
-  /* =========================
-     FORMAT TIME
-  ========================= */
-
+  // FORMAT TIME
   const formatTime = (time) => {
-    if (!time) {
-      return "N/A";
-    }
+    if (!time) return "N/A";
 
     const date = new Date(time);
 
-    if (isNaN(date.getTime())) {
-      return time;
-    }
+    if (isNaN(date.getTime())) return time;
 
     return date.toLocaleTimeString([], {
       hour: "2-digit",
@@ -157,15 +191,10 @@ function KitchenDisplay() {
     });
   };
 
-  /* =========================
-     PAGE
-  ========================= */
-
   return (
     <div className="kds-page">
 
       {/* NEW ORDER ALERT */}
-
       {newOrderAlert && (
         <div className="new-order-alert">
           <div className="alert-icon">🔔</div>
@@ -184,7 +213,6 @@ function KitchenDisplay() {
       )}
 
       {/* HEADER */}
-
       <header className="kds-header">
         <div className="kds-title">
           <div className="kds-logo">👨‍🍳</div>
@@ -204,11 +232,25 @@ function KitchenDisplay() {
           <button className="refresh-btn" onClick={loadOrders}>
             ↻ Refresh
           </button>
+
+          <button
+            onClick={handleLogout}
+            style={{
+              background: "#dc2626",
+              color: "white",
+              border: "none",
+              padding: "10px 16px",
+              borderRadius: "8px",
+              cursor: "pointer",
+              fontWeight: "600",
+            }}
+          >
+            🚪 Logout
+          </button>
         </div>
       </header>
 
       {/* STATISTICS */}
-
       <section className="kds-stats">
         <div className="kds-stat pending-stat">
           <div className="stat-icon">🆕</div>
@@ -236,14 +278,11 @@ function KitchenDisplay() {
       </section>
 
       {/* KITCHEN BOARD */}
-
       <main className="kds-board">
         {kitchenOrders.length === 0 ? (
           <div className="kds-empty">
             <div className="empty-icon">🍽️</div>
-
             <h2>No Active Orders</h2>
-
             <p>
               New customer orders will appear here automatically.
             </p>
@@ -252,29 +291,17 @@ function KitchenDisplay() {
           <div className="kds-order-grid">
             {kitchenOrders.map((order) => {
               const customerName =
-                order.name ||
-                order.customer?.name ||
-                "Customer";
+                order.name || order.customer?.name || "Customer";
 
               const customerPhone =
-                order.phone ||
-                order.customer?.phone ||
-                "";
+                order.phone || order.customer?.phone || "";
 
               const customerAddress =
-                order.address ||
-                order.customer?.address ||
-                "";
+                order.address || order.customer?.address || "";
 
-              const orderItems =
-                order.items ||
-                order.cart ||
-                [];
+              const orderItems = order.items || order.cart || [];
 
-              const orderId =
-                order.orderId ||
-                order.id ||
-                "N/A";
+              const orderId = order.orderId || order.id || "N/A";
 
               return (
                 <div
@@ -285,7 +312,6 @@ function KitchenDisplay() {
                 >
 
                   {/* ORDER HEADER */}
-
                   <div className="order-card-header">
                     <div>
                       <span className="order-label">ORDER</span>
@@ -298,7 +324,6 @@ function KitchenDisplay() {
                   </div>
 
                   {/* STATUS */}
-
                   <div
                     className={`kds-status ${
                       order.status?.toLowerCase().replaceAll(" ", "-")
@@ -311,7 +336,6 @@ function KitchenDisplay() {
                   </div>
 
                   {/* CUSTOMER */}
-
                   <div className="kds-customer">
                     <strong>{customerName}</strong>
 
@@ -325,7 +349,6 @@ function KitchenDisplay() {
                   </div>
 
                   {/* FOOD ITEMS */}
-
                   <div className="kds-items">
                     <h3>Order Items</h3>
 
@@ -362,7 +385,6 @@ function KitchenDisplay() {
                   </div>
 
                   {/* PAYMENT */}
-
                   <div className="kds-payment">
                     <span>Payment</span>
                     <strong>
@@ -371,14 +393,12 @@ function KitchenDisplay() {
                   </div>
 
                   {/* TOTAL */}
-
                   <div className="kds-total">
                     <span>Total</span>
                     <strong>Rs. {order.total || 0}</strong>
                   </div>
 
                   {/* ACTIONS */}
-
                   <div className="kds-actions">
                     {order.status === "Pending" && (
                       <button

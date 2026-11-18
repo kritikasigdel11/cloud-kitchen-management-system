@@ -43,7 +43,11 @@ function Login() {
         alert(data.error || 'Login failed. Please try again.')
         return
       }
-
+     // Clear previous login information
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('user')
+   sessionStorage.removeItem('access_token')
+    sessionStorage.removeItem('user')
       // Save login information
       const storage = rememberMe ? localStorage : sessionStorage
 

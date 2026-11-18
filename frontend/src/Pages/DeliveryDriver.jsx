@@ -1,21 +1,83 @@
-
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "./DeliveryDriver.css";
 
 const API_URL = "http://127.0.0.1:5000/api/orders";
 
 function DeliveryDriver() {
+  const navigate = useNavigate();
+
   const [orders, setOrders] = useState([]);
   const [newDeliveryAlert, setNewDeliveryAlert] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
   const previousDeliveryCount = useRef(null);
 
-  /* =========================
-     LOAD ORDERS FROM DATABASE
-  ========================= */
+  // GET AUTHENTICATION TOKEN
+  const getToken = () => {
+    return (
+      localStorage.getItem("access_token") ||
+      sessionStorage.getItem("access_token") ||
+      localStorage.getItem("token") ||
+      sessionStorage.getItem("token")
+    );
+  };
 
+  // AUTHENTICATION HEADERS
+  const getAuthHeaders = (includeContentType = false) => {
+    const token = getToken();
+
+    const headers = {};
+
+    if (includeContentType) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    return headers;
+  };
+
+  // CHECK USER ROLE
+  useEffect(() => {
+    const token = getToken();
+    const storedUser =
+      localStorage.getItem("user") ||
+      sessionStorage.getItem("user");
+
+    if (!token || !storedUser) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    try {
+      const user = JSON.parse(storedUser);
+
+      if (!["delivery_driver", "admin"].includes(user.role)) {
+        navigate("/", { replace: true });
+        return;
+      }
+
+      setAuthChecked(true);
+    } catch (error) {
+      console.error("Authentication error:", error);
+      navigate("/login", { replace: true });
+    }
+  }, [navigate]);
+
+  // LOAD ORDERS FROM DATABASE
   const loadOrders = async () => {
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(API_URL, {
+        headers: getAuthHeaders(),
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error("Could not load orders");
@@ -63,11 +125,10 @@ function DeliveryDriver() {
     }
   };
 
-  /* =========================
-     AUTOMATIC REFRESH
-  ========================= */
-
+  // AUTOMATIC REFRESH
   useEffect(() => {
+    if (!authChecked) return;
+
     loadOrders();
 
     const interval = setInterval(() => {
@@ -75,26 +136,39 @@ function DeliveryDriver() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [authChecked]);
 
-  /* =========================
-     MARK AS DELIVERED
-  ========================= */
+  // LOGOUT
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
 
+    sessionStorage.removeItem("access_token");
+    sessionStorage.removeItem("token");
+    sessionStorage.removeItem("user");
+
+    navigate("/login", { replace: true });
+  };
+
+  // MARK AS DELIVERED
   const markAsDelivered = async (orderId) => {
     try {
       const response = await fetch(
         `${API_URL}/${encodeURIComponent(orderId)}/status`,
         {
           method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: getAuthHeaders(true),
           body: JSON.stringify({
             status: "Delivered",
           }),
         }
       );
+
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
 
       const result = await response.json();
 
@@ -113,14 +187,9 @@ function DeliveryDriver() {
     }
   };
 
-  /* =========================
-     FORMAT TIME
-  ========================= */
-
+  // FORMAT TIME
   const formatTime = (time) => {
-    if (!time) {
-      return "N/A";
-    }
+    if (!time) return "N/A";
 
     const date = new Date(time);
 
@@ -134,24 +203,22 @@ function DeliveryDriver() {
     });
   };
 
-  /* =========================
-     PAGE
-  ========================= */
+  // WAIT FOR AUTHENTICATION CHECK
+  if (!authChecked) {
+    return <div>Checking authentication...</div>;
+  }
 
   return (
     <div className="delivery-page">
 
       {/* NEW DELIVERY ALERT */}
-
       {newDeliveryAlert && (
         <div className="delivery-alert">
           <div className="delivery-alert-icon">🚚</div>
 
           <div>
             <strong>New Delivery Assigned!</strong>
-            <span>
-              A new order is ready for delivery.
-            </span>
+            <span>A new order is ready for delivery.</span>
           </div>
 
           <button onClick={() => setNewDeliveryAlert(false)}>
@@ -161,7 +228,6 @@ function DeliveryDriver() {
       )}
 
       {/* HEADER */}
-
       <header className="delivery-header">
         <div className="delivery-title">
           <div className="delivery-logo">🚚</div>
@@ -184,11 +250,17 @@ function DeliveryDriver() {
           >
             ↻ Refresh
           </button>
+
+          <button
+            className="delivery-refresh"
+            onClick={handleLogout}
+          >
+            🚪 Logout
+          </button>
         </div>
       </header>
 
       {/* STATISTICS */}
-
       <section className="delivery-stats">
         <div className="delivery-stat">
           <div className="delivery-stat-icon">🚚</div>
@@ -219,7 +291,6 @@ function DeliveryDriver() {
       </section>
 
       {/* DELIVERY BOARD */}
-
       <main className="delivery-board">
         <div className="delivery-board-title">
           <div>
@@ -247,14 +318,10 @@ function DeliveryDriver() {
           <div className="delivery-grid">
             {orders.map((order) => {
               const customerName =
-                order.name ||
-                order.customer?.name ||
-                "Customer";
+                order.name || order.customer?.name || "Customer";
 
               const customerPhone =
-                order.phone ||
-                order.customer?.phone ||
-                "";
+                order.phone || order.customer?.phone || "";
 
               const customerAddress =
                 order.address ||
@@ -262,23 +329,15 @@ function DeliveryDriver() {
                 "Address not available";
 
               const orderItems =
-                order.items ||
-                order.cart ||
-                [];
+                order.items || order.cart || [];
 
               const orderId =
-                order.orderId ||
-                order.id ||
-                "N/A";
+                order.orderId || order.id || "N/A";
 
               return (
-                <div
-                  className="delivery-card"
-                  key={orderId}
-                >
+                <div className="delivery-card" key={orderId}>
 
                   {/* CARD HEADER */}
-
                   <div className="delivery-card-header">
                     <div>
                       <span className="delivery-order-label">
@@ -294,13 +353,11 @@ function DeliveryDriver() {
                   </div>
 
                   {/* STATUS */}
-
                   <div className="delivery-status">
                     🚚 Out for Delivery
                   </div>
 
                   {/* CUSTOMER */}
-
                   <div className="delivery-customer">
                     <h3>👤 {customerName}</h3>
 
@@ -325,7 +382,6 @@ function DeliveryDriver() {
                   </div>
 
                   {/* ITEMS */}
-
                   <div className="delivery-items">
                     <h3>Order Items</h3>
 
@@ -362,7 +418,6 @@ function DeliveryDriver() {
                   </div>
 
                   {/* PAYMENT */}
-
                   <div className="delivery-payment">
                     <span>Payment</span>
 
@@ -372,7 +427,6 @@ function DeliveryDriver() {
                   </div>
 
                   {/* TOTAL */}
-
                   <div className="delivery-total">
                     <span>Total Amount</span>
 
@@ -380,7 +434,6 @@ function DeliveryDriver() {
                   </div>
 
                   {/* ACTION */}
-
                   <button
                     className="delivered-btn"
                     onClick={() => markAsDelivered(orderId)}

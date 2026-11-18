@@ -299,6 +299,70 @@ def register():
         return jsonify({
             "error": "Could not create your account."
         }), 500
+        
+        
+# =========================
+# CREATE DELIVERY DRIVER (ADMIN ONLY)
+# =========================
+
+@app.route("/api/admin/create-driver", methods=["POST"])
+@token_required
+@role_required("admin")
+def create_delivery_driver():
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Please send valid JSON data."}), 400
+
+    name = data.get("name")
+    email = data.get("email")
+    password = data.get("password")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "Driver name is required."}), 400
+
+    if not isinstance(email, str) or not email.strip():
+        return jsonify({"error": "Driver email is required."}), 400
+
+    if not isinstance(password, str) or len(password) < 8:
+        return jsonify({
+            "error": "Password must contain at least 8 characters."
+        }), 400
+
+    email = email.strip().lower()
+
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        return jsonify({
+            "error": "An account with this email already exists."
+        }), 409
+
+    driver = User(
+        name=name.strip(),
+        email=email,
+        password=generate_password_hash(password),
+        role="delivery_driver"
+    )
+
+    try:
+        db.session.add(driver)
+        db.session.commit()
+
+        return jsonify({
+            "message": "Delivery driver account created successfully!",
+            "user": driver.to_dict()
+        }), 201
+
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Delivery driver creation failed")
+
+        return jsonify({
+            "error": "Could not create delivery driver account."
+        }), 500
+
 
 
 # =========================
