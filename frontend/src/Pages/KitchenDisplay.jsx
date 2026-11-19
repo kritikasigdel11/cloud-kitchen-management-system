@@ -72,25 +72,27 @@ function KitchenDisplay() {
 
   // LOAD ORDERS
   const loadOrders = async () => {
-    try {
-      const response = await fetch(API_URL);
+  try {
+    const response = await fetch(API_URL, {
+      headers: getAuthHeaders(),
+    });
 
-      if (!response.ok) {
-        throw new Error("Could not load orders");
-      }
+    if (!response.ok) {
+      throw new Error("Could not load orders");
+    }
 
-      const data = await response.json();
+    const data = await response.json();
 
-      const savedOrders = data.map((order) => ({
-        ...order,
-        id: order.id || order.orderId,
-        orderId: order.orderId || order.id,
-        name: order.name || order.customer?.name || "Customer",
-        phone: order.phone || order.customer?.phone || "",
-        address: order.address || order.customer?.address || "",
-        items: order.items || order.cart || [],
-        createdAt: order.createdAt || order.created_at,
-      }));
+    const savedOrders = data.map((order) => ({
+      ...order,
+      id: order.id || order.orderId,
+      orderId: order.orderId || order.id,
+      name: order.name || order.customer?.name || "Customer",
+      phone: order.phone || order.customer?.phone || "",
+      address: order.address || order.customer?.address || "",
+      items: order.items || order.cart || [],
+      createdAt: order.createdAt || order.created_at,
+    }));
 
       if (
         previousOrderCount.current !== null &&

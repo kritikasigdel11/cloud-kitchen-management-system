@@ -185,21 +185,20 @@ def token_required(function):
 # ROLE-BASED ACCESS PROTECTION
 # =========================
 
-def role_required(required_role):
+def role_required(*required_roles):
     def decorator(function):
         @wraps(function)
         def decorated(*args, **kwargs):
 
-            if g.current_user.role != required_role:
+            if g.current_user.role not in required_roles:
                 return jsonify({
-                    "error": "Access denied. Admin permission is required."
+                    "error": "Access denied. You do not have permission to perform this action."
                 }), 403
 
             return function(*args, **kwargs)
 
         return decorated
     return decorator
-
 
 # =========================
 # HOME ROUTE
@@ -739,15 +738,41 @@ def create_order():
 # GET ALL ORDERS
 # =========================
 
+# =========================
+# GET ALL ORDERS (STAFF ONLY)
+# =========================
+
 @app.route("/api/orders", methods=["GET"])
+@token_required
+@role_required("admin", "kitchen_staff", "delivery_driver")
 def get_orders():
     try:
-        orders = Order.query.order_by(Order.created_at.desc()).all()
+        current_role = g.current_user.role
+
+        # Admin can view all orders
+        if current_role == "admin":
+            orders = Order.query.order_by(
+                Order.created_at.desc()
+            ).all()
+
+        # Kitchen Staff can view kitchen orders
+        elif current_role == "kitchen_staff":
+            orders = Order.query.filter(
+                Order.status.in_(["Pending", "Preparing", "Ready"])
+            ).order_by(Order.created_at.desc()).all()
+
+        # Delivery Driver can view orders sent for delivery
+        elif current_role == "delivery_driver":
+            orders = Order.query.filter_by(
+                status="Out for Delivery"
+            ).order_by(Order.created_at.desc()).all()
 
         result = []
 
         for order in orders:
-            items = OrderItem.query.filter_by(order_id=order.id).all()
+            items = OrderItem.query.filter_by(
+                order_id=order.id
+            ).all()
 
             result.append({
                 "orderId": order.order_id,
@@ -774,28 +799,78 @@ def get_orders():
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not load orders")
+        return jsonify({"error": "Could not load orders."}), 500
 
 # =========================
 # UPDATE ORDER STATUS
 # =========================
 
+# =========================
+# UPDATE ORDER STATUS (STAFF ONLY)
+# =========================
+
 @app.route("/api/orders/<string:order_id>/status", methods=["PATCH"])
+@token_required
+@role_required("admin", "kitchen_staff", "delivery_driver")
 def update_order_status(order_id):
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
 
-        if not data or "status" not in data:
+        if not isinstance(data, dict) or "status" not in data:
             return jsonify({"error": "Status is required"}), 400
+
+        new_status = data["status"]
+
+        allowed_statuses = [
+            "Pending",
+            "Preparing",
+            "Ready",
+            "Out for Delivery",
+            "Delivered"
+        ]
+
+        if new_status not in allowed_statuses:
+            return jsonify({"error": "Invalid order status"}), 400
 
         order = Order.query.filter_by(order_id=order_id).first()
 
         if not order:
             return jsonify({"error": "Order not found"}), 404
 
-        order.status = data["status"]
+        current_role = g.current_user.role
+        current_status = order.status
+
+        # Admin can update any valid status
+        if current_role == "admin":
+            pass
+
+        # Kitchen Staff can prepare and hand over orders
+        elif current_role == "kitchen_staff":
+            allowed_transitions = {
+                "Pending": "Preparing",
+                "Preparing": "Ready",
+                "Ready": "Out for Delivery"
+            }
+
+            if allowed_transitions.get(current_status) != new_status:
+                return jsonify({
+                    "error": "Kitchen Staff cannot make this status change."
+                }), 403
+
+        # Delivery Driver can only mark delivery as completed
+        elif current_role == "delivery_driver":
+            if not (
+                current_status == "Out for Delivery"
+                and new_status == "Delivered"
+            ):
+                return jsonify({
+                    "error": "Driver can only mark an order as Delivered."
+                }), 403
+
+        order.status = new_status
         db.session.commit()
 
         return jsonify({
@@ -804,24 +879,29 @@ def update_order_status(order_id):
             "status": order.status
         }), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        app.logger.exception("Could not update order status")
+        return jsonify({"error": "Could not update order status."}), 500
 
 
 # =========================
 # DELETE ORDER
 # =========================
 
+# =========================
+# DELETE ORDER (ADMIN ONLY)
+# =========================
+
 @app.route("/api/orders/<string:order_id>", methods=["DELETE"])
+@token_required
+@role_required("admin")
 def delete_order(order_id):
     try:
         order = Order.query.filter_by(order_id=order_id).first()
 
         if not order:
             return jsonify({"error": "Order not found"}), 404
-
-        OrderItem.query.filter_by(order_id=order.id).delete()
 
         db.session.delete(order)
         db.session.commit()
@@ -830,9 +910,10 @@ def delete_order(order_id):
             "message": "Order deleted successfully"
         }), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        app.logger.exception("Could not delete order")
+        return jsonify({"error": "Could not delete order."}), 500
 # =========================
 # RUN SERVER
 # =========================

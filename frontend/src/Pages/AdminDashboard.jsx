@@ -44,18 +44,20 @@ function AdminDashboard() {
   // =====================================================
 
   const loadOrders = async () => {
-    try {
-      const response = await fetch("http://127.0.0.1:5000/api/orders");
+  try {
+    const response = await fetch("http://127.0.0.1:5000/api/orders", {
+      headers: getAuthHeaders(),
+    });
 
-      const data = await response.json();
+    const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Could not load orders.");
-      }
+    if (!response.ok) {
+      throw new Error(data.error || "Could not load orders.");
+    }
 
-      if (!Array.isArray(data)) {
-        throw new Error("Invalid orders response from backend.");
-      }
+    if (!Array.isArray(data)) {
+      throw new Error("Invalid orders response from backend.");
+    }
 
       // Convert backend order format into the format
       // already used by the Admin Dashboard.
